@@ -1,17 +1,9 @@
 [package]
-name = "rust_legacy_into_modern"
+name = "rust_modernizer"
 version = "0.1.0"
 edition = "2021"
-authors = ["RUSTACEAN-EMPIRE-EXPERIMENT-NO-OFFICIAL"]
-license = "MIT"
-description = "Automatic migration tool: Legacy Rust → Modern Rust (Edition + Clippy Fix + Formatter + Semantic Diff)"
-repository = "https://github.com/RUSTACEAN-EMPIRE-EXPERIMENT-NO-OFFICIAL/RUST-LEGACY-INTO-MODERN-RUST-MIGRATION"
-
-# Rust auto-migration 실험용 feature group
-[features]
-default = ["modernize"]
-modernize = []
-legacy_compat = []
 
 [dependencies]
-similar = "2"
+reqwest = { version = "0.12", features = ["blocking"] }
+scraper = "0.17"
+regex = "1"
