@@ -1,123 +1,143 @@
-use std::io::{self, Write};
-use std::process::{Command, Output};
+use reqwest::blocking::get;
+use scraper::{Html, Selector};
 use std::fs;
-use similar::{TextDiff, ChangeTag};
+use std::path::Path;
+use std::{env, io};
 
-fn pause() {
-    let mut input = String::new();
-    println!("\nPress ENTER to continue...");
-    let _ = io::stdin().read_line(&mut input);
-}
+/// 공식 Rust 문서를 파싱하여 dynamic rules 생성
+fn fetch_dynamic_rules() -> Vec<(String, String)> {
+    let urls = vec![
+        "https://doc.rust-lang.org/reference/",
+        "https://doc.rust-lang.org/book/",
+        "https://doc.rust-lang.org/edition-guide/",
+        "https://rust-lang.github.io/api-guidelines/",
+        "https://doc.rust-lang.org/unstable-book/",
+        "https://doc.rust-lang.org/nightly/rustc/lints/listing/warn-by-default/deprecated.html",
+    ];
 
-fn run_python_modernizer(input: &str, output: &str) -> Option<Output> {
-    // 1) python3 먼저 시도
-    let try_py3 = Command::new("python3")
-        .arg("tools/rust_modernizer.py")
-        .arg(input)
-        .arg(output)
-        .output();
+    let mut rules = vec![];
 
-    if try_py3.is_ok() {
-        return Some(try_py3.unwrap());
-    }
+    println!("[INFO] Fetching official Rust docs...");
 
-    // 2) python이 있는 OS에서는 python 시도
-    let try_py = Command::new("python")
-        .arg("tools/rust_modernizer.py")
-        .arg(input)
-        .arg(output)
-        .output();
+    for url in urls {
+        println!("  - {}", url);
 
-    if try_py.is_ok() {
-        return Some(try_py.unwrap());
-    }
+        let Ok(resp) = get(url) else { continue };
+        let Ok(text) = resp.text() else { continue };
 
-    None
-}
+        let doc = Html::parse_document(&text);
+        let selector = Selector::parse("body").unwrap();
+        let body_text = doc
+            .select(&selector)
+            .next()
+            .map(|e| e.text().collect::<String>().to_lowercase())
+            .unwrap_or_default();
 
-fn print_diff(old: &str, new: &str) {
-    println!("\n=== Diff (Legacy → Modern) ===\n");
+        // Rule: prefer ? operator → unwrap(), expect()
+        if body_text.contains("prefer the ? operator")
+            || body_text.contains("use the ? operator")
+            || body_text.contains("the ? operator")
+        {
+            rules.push((".unwrap()".into(), "?".into()));
+            rules.push(("expect(".into(), "? /* expect */ (".into()));
+        }
 
-    let diff = TextDiff::from_lines(old, new);
+        // try! deprecated
+        if body_text.contains("try! macro") && body_text.contains("deprecated") {
+            rules.push(("try!(".into(), "?".into()));
+        }
 
-    for change in diff.iter_all_changes() {
-        match change.tag() {
-            ChangeTag::Delete => print!("\x1b[31m-{}\x1b[0m", change),
-            ChangeTag::Insert => print!("\x1b[32m+{}\x1b[0m", change),
-            ChangeTag::Equal  => print!(" {}", change),
+        // avoid println!
+        if body_text.contains("avoid println") || body_text.contains("avoid printing") {
+            rules.push(("println!".into(), "log::info!".into()));
+        }
+
+        // Deprecated APIs
+        let deprecated_list = [
+            "description()",
+            "mem::uninitialized",
+            "std::sync::once_init",
+        ];
+
+        for dep in deprecated_list {
+            if body_text.contains(&dep.to_lowercase()) {
+                rules.push((dep.into(), format!("/* deprecated: {} */", dep)));
+            }
         }
     }
 
-    println!("\n==============================");
+    println!("[INFO] Dynamic rules generated: {}", rules.len());
+    rules
+}
+
+/// 문자열 기반 대체
+fn apply_rules(code: &str, rules: &[(String, String)]) -> String {
+    let mut new_code = code.to_string();
+    for (old, new) in rules {
+        new_code = new_code.replace(old, new);
+    }
+    new_code
+}
+
+/// Diff 출력
+fn print_diff(old: &str, new: &str) {
+    println!("--- DIFF START ----------------------");
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+
+    for i in 0..old_lines.len().max(new_lines.len()) {
+        let old_line = old_lines.get(i).unwrap_or(&"");
+        let new_line = new_lines.get(i).unwrap_or(&"");
+
+        if old_line != new_line {
+            println!("- {}", old_line);
+            println!("+ {}", new_line);
+        }
+    }
+    println!("--- DIFF END ------------------------");
 }
 
 fn main() {
-    println!("=== Rust Legacy → Modern Migration Tool ===\n");
-    println!("변환할 Rust 파일 경로를 입력하세요.");
-    print!("> ");
-    io::stdout().flush().unwrap();
+    let args: Vec<String> = env::args().collect();
 
-    let mut file_path = String::new();
-    io::stdin().read_line(&mut file_path).unwrap();
-    let file_path = file_path.trim();
-
-    if !std::path::Path::new(file_path).exists() {
-        println!("❌ 파일을 찾을 수 없습니다: {}", file_path);
-        pause();
+    if args.len() != 3 {
+        eprintln!("Usage:");
+        eprintln!("  rust_modernizer <input.rs> <output.rs>");
         return;
     }
 
-    let legacy_code = fs::read_to_string(file_path).expect("파일 읽기 실패");
+    let input = &args[1];
+    let output = &args[2];
 
-    println!("\n--- Legacy Code Preview ---\n{}\n---------------------------", legacy_code);
-
-    println!("⚙️ Modernizer(Python) 실행 중...");
-
-    let python_output = run_python_modernizer(file_path, "modern_output.rs");
-
-    match python_output {
-        None => {
-            println!("❌ Python 실행 자체가 실패했습니다.");
-            println!("python3 또는 python 명령이 없는 환경일 수 있습니다.");
-            pause();
-            return;
-        }
-        Some(out) => {
-            println!("\n=== Modernizer STDOUT ===");
-            println!("{}", String::from_utf8_lossy(&out.stdout));
-
-            println!("\n=== Modernizer STDERR ===");
-            println!("{}", String::from_utf8_lossy(&out.stderr));
-        }
-    }
-
-    if !std::path::Path::new("modern_output.rs").exists() {
-        println!("❌ modern_output.rs 생성 실패");
-        println!("Modernizer 파이썬 로직 안에서 예외가 발생했을 가능성이 있습니다.");
-        println!("위의 STDERR 출력을 검토하세요!");
-        pause();
+    if !Path::new(input).exists() {
+        eprintln!("❌ File not found: {}", input);
         return;
     }
 
-    let modern_code = fs::read_to_string("modern_output.rs").unwrap();
+    println!("=== Rust Legacy → Modern Migration Tool ===");
+    println!("Input  : {}", input);
+    println!("Output : {}", output);
 
-    // Diff 출력
-    print_diff(&legacy_code, &modern_code);
+    let original = fs::read_to_string(input).expect("Failed to read input file");
 
-    // 파일 덮어쓰기 여부
-    println!("\n변환된 코드를 원본 파일에 덮어쓸까요? (y/N)");
-    print!("> ");
-    io::stdout().flush().unwrap();
+    println!("--- Legacy Code Preview ---");
+    println!("{}", original);
+    println!("---------------------------");
 
-    let mut overwrite = String::new();
-    io::stdin().read_line(&mut overwrite).unwrap();
+    println!("⚙️ Generating dynamic rules from rust-lang.org ...");
+    let rules = fetch_dynamic_rules();
 
-    if overwrite.trim().eq_ignore_ascii_case("y") {
-        fs::write(file_path, modern_code).unwrap();
-        println!("✔️ 파일 덮어쓰기 완료!");
-    } else {
-        println!("✔️ modern_output.rs 로 저장됨");
+    println!("⚙️ Applying rules...");
+    let modernized = apply_rules(&original, &rules);
+
+    print_diff(&original, &modernized);
+
+    if let Some(parent) = Path::new(output).parent() {
+        fs::create_dir_all(parent).ok();
     }
 
-    pause();
+    fs::write(output, modernized).expect("Failed to write output");
+
+    println!("✅ modern_output.rs 생성 완료!");
 }
+
