@@ -2,7 +2,7 @@ use reqwest::blocking::get;
 use scraper::{Html, Selector};
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// 공식 Rust 문서를 파싱하여 dynamic rules 생성
 fn fetch_dynamic_rules() -> Vec<(String, String)> {
@@ -51,7 +51,7 @@ fn fetch_dynamic_rules() -> Vec<(String, String)> {
             rules.push(("println!".into(), "log::info!".into()));
         }
 
-        // deprecated API
+        // deprecated API checks
         let deprecated_list = [
             "description()",
             "mem::uninitialized",
@@ -69,16 +69,21 @@ fn fetch_dynamic_rules() -> Vec<(String, String)> {
     rules
 }
 
+/// 문자열 치환으로 규칙 적용
 fn apply_rules(code: &str, rules: &[(String, String)]) -> String {
     let mut new_code = code.to_string();
+
     for (old, new) in rules {
         new_code = new_code.replace(old, new);
     }
+
     new_code
 }
 
+/// 간단 diff 출력
 fn print_diff(old: &str, new: &str) {
     println!("--- DIFF START ----------------------");
+
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
 
@@ -91,10 +96,11 @@ fn print_diff(old: &str, new: &str) {
             println!("+ {}", new_line);
         }
     }
+
     println!("--- DIFF END ------------------------");
 }
 
-/// pause (Windows 포함 모든 OS에서 작동)
+/// pause 기능 (Windows / Mac / Linux 모두 작동)
 fn pause() {
     let mut s = String::new();
     print!("\nPress ENTER to continue...");
@@ -107,26 +113,38 @@ fn main() {
     println!("    Rust Legacy → Modern Migration Tool");
     println!("============================================\n");
 
-    // 사용자 입력
     print!("변환할 Rust 파일 경로를 입력하세요.\n> ");
     io::stdout().flush().unwrap();
 
-    let mut input_path = String::new();
-    io::stdin().read_line(&mut input_path).unwrap();
-    let input_path = input_path.trim();
+    let mut input_path_str = String::new();
+    io::stdin().read_line(&mut input_path_str).unwrap();
+    let input_path_str = input_path_str.trim();
 
-    if !Path::new(input_path).exists() {
-        eprintln!("❌ 파일이 존재하지 않습니다: {}", input_path);
+    let input_path = Path::new(input_path_str);
+
+    if !input_path.exists() {
+        eprintln!("❌ 파일이 존재하지 않습니다: {}", input_path_str);
         pause();
         return;
     }
 
-    let output_path = "modern_output.rs";
+    let parent_dir: PathBuf = input_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
 
-    println!("\n--- Legacy Code Preview ---");
-    let original = fs::read_to_string(input_path).expect("Failed to read file");
+    let output_path = parent_dir.join("modern_output.rs");
+
+    println!("📄 입력 파일: {}", input_path.display());
+    println!("📁 출력 파일: {}\n", output_path.display());
+
+    // 원본 읽기
+    let original =
+        fs::read_to_string(input_path).expect("Failed to read input file");
+
+    println!("--- Legacy Code Preview ---");
     println!("{}", original);
-    println!("---------------------------");
+    println!("---------------------------\n");
 
     println!("⚙️ Rust 공식 문서 기반 Dynamic Rules 생성 중...");
     let rules = fetch_dynamic_rules();
@@ -136,10 +154,12 @@ fn main() {
 
     print_diff(&original, &modernized);
 
-    fs::write(output_path, modernized).expect("Failed to write output");
+    // 출력 경로 생성
+    fs::create_dir_all(&parent_dir).ok();
+    fs::write(&output_path, modernized).expect("Failed to write output");
 
-    println!("✅ 변환 완료!");
-    println!("→ 결과 파일: {}", output_path);
+    println!("\n✅ 변환 완료!");
+    println!("→ {}", output_path.display());
 
     pause();
 }
