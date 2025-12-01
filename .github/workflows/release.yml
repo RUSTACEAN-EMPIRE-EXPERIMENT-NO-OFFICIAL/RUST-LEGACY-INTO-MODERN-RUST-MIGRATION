@@ -59,38 +59,60 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
 
-      - run: cargo build --release
-      - run: cargo test --release || true
+      - name: Build
+        run: cargo build --release
 
+      - name: Test
+        run: cargo test --release || true
+
+      # --- ProofLedger ---
       - name: ProofLedger
         run: |
           mkdir -p proofledger
-          echo "OS: ${{ matrix.os }}" > proofledger/build-${{ matrix.os }}.txt
+          echo "=== Build Info ===" > proofledger/build-${{ matrix.os }}.txt
+          echo "OS: ${{ matrix.os }}" >> proofledger/build-${{ matrix.os }}.txt
           echo "Commit: ${{ github.sha }}" >> proofledger/build-${{ matrix.os }}.txt
+          echo "Branch: ${{ github.ref_name }}" >> proofledger/build-${{ matrix.os }}.txt
           echo "Time: $(date)" >> proofledger/build-${{ matrix.os }}.txt
 
-      - name: SHA256
+      # --- SHA256 (Linux & macOS) ---
+      - name: SHA256 (Unix)
         if: matrix.os != 'windows-latest'
         run: |
           echo "=== SHA256 ===" > proofledger/sha256-${{ matrix.os }}.txt
           find . -type f -maxdepth 3 ! -path "./.git/*" \
             -exec sha256sum {} \; >> proofledger/sha256-${{ matrix.os }}.txt
 
+      # --- SHA256 (Windows) ---
       - name: SHA256 (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           "=== SHA256 ===" | Out-File proofledger/sha256-windows.txt
           Get-ChildItem -Recurse -File | ForEach-Object {
-            $h = Get-FileHash $_.FullName -Algorithm SHA256
-            "$($h.Hash)  $($_.FullName)" | Out-File proofledger/sha256-windows.txt -Append
+            $hash = Get-FileHash $_.FullName -Algorithm SHA256
+            "$($hash.Hash)  $($_.FullName)" | Out-File proofledger/sha256-windows.txt -Append
           }
 
-      - name: Package
+      # --- ZIP Packaging for Mac & Linux ---
+      - name: Package Artifact (Unix)
+        if: matrix.os != 'windows-latest'
+        shell: bash
         run: |
           mkdir -p out
           zip -r out/RustModernized-v12-${{ matrix.os }}.zip \
             target/release proofledger migration_logs || true
+
+      # --- ZIP Packaging for Windows ---
+      - name: Package Artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Compress-Archive `
+            -Path "target/release","proofledger","migration_logs" `
+            -DestinationPath "out/RustModernized-v12-${{ matrix.os }}.zip" `
+            -Force
 
       - uses: actions/upload-artifact@v4
         with:
