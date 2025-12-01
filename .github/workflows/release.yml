@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: Build Modernizer on 3OS
+    name: Build Modernizer on 3 OS
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -17,110 +17,147 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Rust toolchain
       - uses: dtolnay/rust-toolchain@stable
 
-      # Build
-      - name: Build (release)
+      # Build (release mode)
+      - name: Build
         run: cargo build --release
 
-      # Output binary path depends on OS
-      - name: Rename binary
+      # -----------------------
+      # OS-SPECIFIC BINARY COPY
+      # -----------------------
+
+      - name: Copy binary (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          mkdir dist
+          Copy-Item target/release/rust_modernizer.exe dist/rust_modernizer-windows.exe
+
+      - name: Copy binary (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
         run: |
           mkdir -p dist
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp target/release/rust_modernizer.exe dist/rust_modernizer-windows.exe
-          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            cp target/release/rust_modernizer dist/rust_modernizer-macos
-          else
-            cp target/release/rust_modernizer dist/rust_modernizer-ubuntu
-          fi
+          cp target/release/rust_modernizer dist/rust_modernizer-macos
 
-      # Prepare example file
-      - name: Prepare legacy example
+      - name: Copy binary (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
         run: |
-          echo 'fn main(){println!("legacy legacy");}' > hello.rs
+          mkdir -p dist
+          cp target/release/rust_modernizer dist/rust_modernizer-ubuntu
 
-      # Run modernizer on each OS
-      - name: Run Modernizer example
+      # -----------------------
+      # RUN MODERNIZER TEST
+      # -----------------------
+
+      - name: Prepare legacy example
+        shell: bash
+        run: |
+          echo 'fn main(){println!("legacy code");}' > hello.rs
+
+      - name: Run Modernizer
+        if: matrix.os != 'windows-latest'
+        shell: bash
         run: |
           mkdir -p output
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            ./dist/rust_modernizer-windows.exe hello.rs output/modern_output.rs
-          else
-            ./dist/rust_modernizer-* hello.rs output/modern_output.rs
-          fi
+          ./dist/rust_modernizer-* hello.rs output/modern_output.rs
 
-      # SHA256
-      - name: Generate SHA256
+      - name: Run Modernizer (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          cd dist
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            certutil -hashfile rust_modernizer-windows.exe SHA256 > sha256-windows.txt
-          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            shasum -a 256 rust_modernizer-macos > sha256-macos.txt
-          else
-            sha256sum rust_modernizer-ubuntu > sha256-ubuntu.txt
-          fi
+          mkdir output
+          .\dist\rust_modernizer-windows.exe hello.rs output/modern_output.rs
 
-      # ZIP packaging
-      - name: Package ZIP
+      # -----------------------
+      # SHA256 SUM
+      # -----------------------
+
+      - name: SHA256 (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          mkdir -p package
-          cp dist/* package/
+          certutil -hashfile dist\rust_modernizer-windows.exe SHA256 > dist\sha256-windows.txt
 
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            powershell -Command "Compress-Archive -LiteralPath package -DestinationPath rust_modernizer-windows.zip"
-            mv rust_modernizer-windows.zip dist/
-          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            zip -r rust_modernizer-macos.zip package
-            mv rust_modernizer-macos.zip dist/
-          else
-            zip -r rust_modernizer-ubuntu.zip package
-            mv rust_modernizer-ubuntu.zip dist/
-          fi
+      - name: SHA256 (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          shasum -a 256 dist/rust_modernizer-macos > dist/sha256-macos.txt
 
+      - name: SHA256 (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          sha256sum dist/rust_modernizer-ubuntu > dist/sha256-ubuntu.txt
+
+      # -----------------------
+      # ZIP PACKAGING
+      # -----------------------
+
+      - name: ZIP (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Compress-Archive -LiteralPath dist -DestinationPath rust_modernizer-windows.zip
+
+      - name: ZIP (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          zip -r rust_modernizer-macos.zip dist
+
+      - name: ZIP (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          zip -r rust_modernizer-ubuntu.zip dist
+
+      # -----------------------
       # Upload artifact
+      # -----------------------
+
       - uses: actions/upload-artifact@v4
         with:
           name: modernizer-${{ matrix.os }}
-          path: dist/
+          path: |
+            dist/
+            *.zip
+            output/
 
+  # RELEASE JOB
   release:
-    name: Create Unified Release
+    name: Publish Release (3 OS Bundles)
     needs: build
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      # Extract timestamp version
       - name: Extract version tag
         id: version
         run: |
           echo "tag=v$(date +'%Y.%m.%d-%H%M')-modernizer" >> $GITHUB_OUTPUT
 
-      # Download all OS artifacts
-      - name: Download artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-assets/
 
-      # Create GitHub Release
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: Rust Modernizer Full 3OS Release (${{ steps.version.outputs.tag }})
+          name: Rust Modernizer – 3 OS Release (${{ steps.version.outputs.tag }})
           body: |
-            ## 🚀 Rust Legacy → Modern Migration Tool
-            This release contains:
-            - Windows, macOS, Linux binaries
-            - ZIP bundles
+            ## 🚀 Rust Legacy → Modern Migration Tool (3 OS Release)
+            - Windows / macOS / Linux binaries included
             - SHA256 checksums
-            - Modernizer example outputs
-
-            Fully auto-generated by GitHub Actions.
+            - ZIP bundles
+            - Modernized example output
+            - 100% Rust-only, no Python dependency
           files: release-assets/**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
