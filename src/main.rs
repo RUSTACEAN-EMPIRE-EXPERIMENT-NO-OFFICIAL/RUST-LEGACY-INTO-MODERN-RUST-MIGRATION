@@ -33,7 +33,7 @@ fn fetch_dynamic_rules() -> Vec<(String, String)> {
             .map(|e| e.text().collect::<String>().to_lowercase())
             .unwrap_or_default();
 
-        // Rule: prefer ? operator → unwrap(), expect()
+        // Rule: prefer ? operator
         if body_text.contains("prefer the ? operator")
             || body_text.contains("use the ? operator")
             || body_text.contains("the ? operator")
@@ -97,12 +97,29 @@ fn print_diff(old: &str, new: &str) {
     println!("--- DIFF END ------------------------");
 }
 
+/// pause 지원 (크로스 플랫폼)
+fn pause() {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let _ = Command::new("cmd").args(&["/C", "pause"]).status();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::io::{self, Read};
+        println!("Press ENTER to continue...");
+        let _ = io::stdin().read(&mut [0u8]);
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 3 {
         eprintln!("Usage:");
         eprintln!("  rust_modernizer <input.rs> <output.rs>");
+        pause();
         return;
     }
 
@@ -111,6 +128,7 @@ fn main() {
 
     if !Path::new(input).exists() {
         eprintln!("❌ File not found: {}", input);
+        pause();
         return;
     }
 
@@ -136,8 +154,11 @@ fn main() {
         fs::create_dir_all(parent).ok();
     }
 
-    fs::write(output, modernized).expect("Failed to write output");
+    fs::write(output, &modernized).expect("Failed to write output");
 
     println!("✅ modern_output.rs 생성 완료!");
+
+    pause();
 }
+
 
