@@ -1,5 +1,11 @@
 name: rust-modernizer-3os
 
+# -------------------------------
+# IMPORTANT: Release 권한 부여
+# -------------------------------
+permissions:
+  contents: write
+
 on:
   push:
     branches: ["main"]
@@ -19,14 +25,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Build (release mode)
-      - name: Build
+      - name: Build (release)
         run: cargo build --release
 
       # -----------------------
       # OS-SPECIFIC BINARY COPY
       # -----------------------
-
       - name: Copy binary (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -49,15 +53,14 @@ jobs:
           cp target/release/rust_modernizer dist/rust_modernizer-ubuntu
 
       # -----------------------
-      # RUN MODERNIZER TEST
+      # Modernizer test
       # -----------------------
-
       - name: Prepare legacy example
         shell: bash
         run: |
           echo 'fn main(){println!("legacy code");}' > hello.rs
 
-      - name: Run Modernizer
+      - name: Run Modernizer (Linux/macOS)
         if: matrix.os != 'windows-latest'
         shell: bash
         run: |
@@ -72,9 +75,8 @@ jobs:
           .\dist\rust_modernizer-windows.exe hello.rs output/modern_output.rs
 
       # -----------------------
-      # SHA256 SUM
+      # SHA256
       # -----------------------
-
       - name: SHA256 (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -94,9 +96,8 @@ jobs:
           sha256sum dist/rust_modernizer-ubuntu > dist/sha256-ubuntu.txt
 
       # -----------------------
-      # ZIP PACKAGING
+      # ZIP packaging
       # -----------------------
-
       - name: ZIP (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -116,9 +117,8 @@ jobs:
           zip -r rust_modernizer-ubuntu.zip dist
 
       # -----------------------
-      # Upload artifact
+      # Upload build artifacts
       # -----------------------
-
       - uses: actions/upload-artifact@v4
         with:
           name: modernizer-${{ matrix.os }}
@@ -127,16 +127,18 @@ jobs:
             *.zip
             output/
 
-  # RELEASE JOB
+  # -------------------------------
+  # RELEASE JOB (needs permission)
+  # -------------------------------
   release:
-    name: Publish Release (3 OS Bundles)
+    name: Publish 3 OS Release
     needs: build
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract version tag
+      - name: Extract timestamp tag
         id: version
         run: |
           echo "tag=v$(date +'%Y.%m.%d-%H%M')-modernizer" >> $GITHUB_OUTPUT
@@ -153,12 +155,14 @@ jobs:
           name: Rust Modernizer – 3 OS Release (${{ steps.version.outputs.tag }})
           body: |
             ## 🚀 Rust Legacy → Modern Migration Tool (3 OS Release)
-            - Windows / macOS / Linux binaries included
-            - SHA256 checksums
+            **Included:**
+            - Windows, macOS, Linux binaries
             - ZIP bundles
-            - Modernized example output
-            - 100% Rust-only, no Python dependency
+            - SHA256 checksums
+            - Modernizer example outputs
+            - 100% Rust-only dynamic rule engine
           files: release-assets/**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 
