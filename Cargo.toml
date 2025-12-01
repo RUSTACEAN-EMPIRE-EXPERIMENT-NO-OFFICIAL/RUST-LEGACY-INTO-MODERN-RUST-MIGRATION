@@ -14,4 +14,4 @@ modernize = []
 legacy_compat = []
 
 [dependencies]
-# (필요 시 추가)
+similar = "2"
