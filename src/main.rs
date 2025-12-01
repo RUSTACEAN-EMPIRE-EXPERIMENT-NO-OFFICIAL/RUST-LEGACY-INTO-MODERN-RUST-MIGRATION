@@ -1,8 +1,8 @@
 use reqwest::blocking::get;
 use scraper::{Html, Selector};
 use std::fs;
+use std::io::{self, Write};
 use std::path::Path;
-use std::{env, io};
 
 /// 공식 Rust 문서를 파싱하여 dynamic rules 생성
 fn fetch_dynamic_rules() -> Vec<(String, String)> {
@@ -33,10 +33,9 @@ fn fetch_dynamic_rules() -> Vec<(String, String)> {
             .map(|e| e.text().collect::<String>().to_lowercase())
             .unwrap_or_default();
 
-        // Rule: prefer ? operator
+        // prefer ? operator
         if body_text.contains("prefer the ? operator")
             || body_text.contains("use the ? operator")
-            || body_text.contains("the ? operator")
         {
             rules.push((".unwrap()".into(), "?".into()));
             rules.push(("expect(".into(), "? /* expect */ (".into()));
@@ -48,11 +47,11 @@ fn fetch_dynamic_rules() -> Vec<(String, String)> {
         }
 
         // avoid println!
-        if body_text.contains("avoid println") || body_text.contains("avoid printing") {
+        if body_text.contains("avoid println") {
             rules.push(("println!".into(), "log::info!".into()));
         }
 
-        // Deprecated APIs
+        // deprecated API
         let deprecated_list = [
             "description()",
             "mem::uninitialized",
@@ -70,7 +69,6 @@ fn fetch_dynamic_rules() -> Vec<(String, String)> {
     rules
 }
 
-/// 문자열 기반 대체
 fn apply_rules(code: &str, rules: &[(String, String)]) -> String {
     let mut new_code = code.to_string();
     for (old, new) in rules {
@@ -79,7 +77,6 @@ fn apply_rules(code: &str, rules: &[(String, String)]) -> String {
     new_code
 }
 
-/// Diff 출력
 fn print_diff(old: &str, new: &str) {
     println!("--- DIFF START ----------------------");
     let old_lines: Vec<&str> = old.lines().collect();
@@ -97,66 +94,52 @@ fn print_diff(old: &str, new: &str) {
     println!("--- DIFF END ------------------------");
 }
 
-/// pause 지원 (크로스 플랫폼)
+/// pause (Windows 포함 모든 OS에서 작동)
 fn pause() {
-    #[cfg(target_os = "windows")]
-    {
-        use std::process::Command;
-        let _ = Command::new("cmd").args(&["/C", "pause"]).status();
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        use std::io::{self, Read};
-        println!("Press ENTER to continue...");
-        let _ = io::stdin().read(&mut [0u8]);
-    }
+    let mut s = String::new();
+    print!("\nPress ENTER to continue...");
+    io::stdout().flush().unwrap();
+    io::stdin().read_line(&mut s).unwrap();
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    println!("============================================");
+    println!("    Rust Legacy → Modern Migration Tool");
+    println!("============================================\n");
 
-    if args.len() != 3 {
-        eprintln!("Usage:");
-        eprintln!("  rust_modernizer <input.rs> <output.rs>");
+    // 사용자 입력
+    print!("변환할 Rust 파일 경로를 입력하세요.\n> ");
+    io::stdout().flush().unwrap();
+
+    let mut input_path = String::new();
+    io::stdin().read_line(&mut input_path).unwrap();
+    let input_path = input_path.trim();
+
+    if !Path::new(input_path).exists() {
+        eprintln!("❌ 파일이 존재하지 않습니다: {}", input_path);
         pause();
         return;
     }
 
-    let input = &args[1];
-    let output = &args[2];
+    let output_path = "modern_output.rs";
 
-    if !Path::new(input).exists() {
-        eprintln!("❌ File not found: {}", input);
-        pause();
-        return;
-    }
-
-    println!("=== Rust Legacy → Modern Migration Tool ===");
-    println!("Input  : {}", input);
-    println!("Output : {}", output);
-
-    let original = fs::read_to_string(input).expect("Failed to read input file");
-
-    println!("--- Legacy Code Preview ---");
+    println!("\n--- Legacy Code Preview ---");
+    let original = fs::read_to_string(input_path).expect("Failed to read file");
     println!("{}", original);
     println!("---------------------------");
 
-    println!("⚙️ Generating dynamic rules from rust-lang.org ...");
+    println!("⚙️ Rust 공식 문서 기반 Dynamic Rules 생성 중...");
     let rules = fetch_dynamic_rules();
 
-    println!("⚙️ Applying rules...");
+    println!("⚙️ Modernizing code...");
     let modernized = apply_rules(&original, &rules);
 
     print_diff(&original, &modernized);
 
-    if let Some(parent) = Path::new(output).parent() {
-        fs::create_dir_all(parent).ok();
-    }
+    fs::write(output_path, modernized).expect("Failed to write output");
 
-    fs::write(output, &modernized).expect("Failed to write output");
-
-    println!("✅ modern_output.rs 생성 완료!");
+    println!("✅ 변환 완료!");
+    println!("→ 결과 파일: {}", output_path);
 
     pause();
 }
