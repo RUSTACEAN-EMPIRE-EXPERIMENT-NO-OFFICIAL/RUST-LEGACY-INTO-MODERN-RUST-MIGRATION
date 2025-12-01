@@ -1,8 +1,8 @@
 name: rust-modernizer-3os
 
-# -------------------------------
-# IMPORTANT: Release 권한 부여
-# -------------------------------
+# ---------------------------------------------------------
+# GitHub Release 생성 권한 (403 방지)
+# ---------------------------------------------------------
 permissions:
   contents: write
 
@@ -25,12 +25,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # ---------------------------------------------------------
+      # Build Release
+      # ---------------------------------------------------------
       - name: Build (release)
         run: cargo build --release
 
-      # -----------------------
-      # OS-SPECIFIC BINARY COPY
-      # -----------------------
+      # ---------------------------------------------------------
+      # Copy binary (OS-specific)
+      # ---------------------------------------------------------
       - name: Copy binary (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -52,31 +55,41 @@ jobs:
           mkdir -p dist
           cp target/release/rust_modernizer dist/rust_modernizer-ubuntu
 
-      # -----------------------
-      # Modernizer test
-      # -----------------------
+      # ---------------------------------------------------------
+      # Prepare simple legacy example
+      # ---------------------------------------------------------
       - name: Prepare legacy example
         shell: bash
         run: |
           echo 'fn main(){println!("legacy code");}' > hello.rs
 
-      - name: Run Modernizer (Linux/macOS)
-        if: matrix.os != 'windows-latest'
-        shell: bash
-        run: |
-          mkdir -p output
-          ./dist/rust_modernizer-* hello.rs output/modern_output.rs
-
+      # ---------------------------------------------------------
+      # Run Modernizer — OUTPUT FILE NAME OS별로 분리 (중복 충돌 방지)
+      # ---------------------------------------------------------
       - name: Run Modernizer (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           mkdir output
-          .\dist\rust_modernizer-windows.exe hello.rs output/modern_output.rs
+          .\dist\rust_modernizer-windows.exe hello.rs output/modern_output-windows.rs
 
-      # -----------------------
-      # SHA256
-      # -----------------------
+      - name: Run Modernizer (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          mkdir -p output
+          ./dist/rust_modernizer-macos hello.rs output/modern_output-macos.rs
+
+      - name: Run Modernizer (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          mkdir -p output
+          ./dist/rust_modernizer-ubuntu hello.rs output/modern_output-ubuntu.rs
+
+      # ---------------------------------------------------------
+      # SHA256 Checksum
+      # ---------------------------------------------------------
       - name: SHA256 (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -95,9 +108,9 @@ jobs:
         run: |
           sha256sum dist/rust_modernizer-ubuntu > dist/sha256-ubuntu.txt
 
-      # -----------------------
+      # ---------------------------------------------------------
       # ZIP packaging
-      # -----------------------
+      # ---------------------------------------------------------
       - name: ZIP (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -107,47 +120,48 @@ jobs:
       - name: ZIP (macOS)
         if: matrix.os == 'macos-latest'
         shell: bash
-        run: |
-          zip -r rust_modernizer-macos.zip dist
+        run: zip -r rust_modernizer-macos.zip dist
 
       - name: ZIP (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         shell: bash
-        run: |
-          zip -r rust_modernizer-ubuntu.zip dist
+        run: zip -r rust_modernizer-ubuntu.zip dist
 
-      # -----------------------
-      # Upload build artifacts
-      # -----------------------
+      # ---------------------------------------------------------
+      # Upload artifacts
+      # ---------------------------------------------------------
       - uses: actions/upload-artifact@v4
         with:
           name: modernizer-${{ matrix.os }}
           path: |
             dist/
-            *.zip
             output/
+            *.zip
 
-  # -------------------------------
-  # RELEASE JOB (needs permission)
-  # -------------------------------
+  # ---------------------------------------------------------
+  # RELEASE JOB (after all 3 OS build jobs complete)
+  # ---------------------------------------------------------
   release:
-    name: Publish 3 OS Release
+    name: Publish Release
     needs: build
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
+      # Auto-generate tag
       - name: Extract timestamp tag
         id: version
         run: |
           echo "tag=v$(date +'%Y.%m.%d-%H%M')-modernizer" >> $GITHUB_OUTPUT
 
+      # Download build artifacts
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-assets/
 
+      # Publish GitHub Release
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -155,12 +169,11 @@ jobs:
           name: Rust Modernizer – 3 OS Release (${{ steps.version.outputs.tag }})
           body: |
             ## 🚀 Rust Legacy → Modern Migration Tool (3 OS Release)
-            **Included:**
+            Included:
             - Windows, macOS, Linux binaries
-            - ZIP bundles
+            - ZIP packages
             - SHA256 checksums
-            - Modernizer example outputs
-            - 100% Rust-only dynamic rule engine
+            - OS-specific Modernizer outputs
           files: release-assets/**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
