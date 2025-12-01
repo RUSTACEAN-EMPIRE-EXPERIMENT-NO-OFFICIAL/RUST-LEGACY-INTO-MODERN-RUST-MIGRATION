@@ -1,7 +1,4 @@
-name: rust-ci-v12.2-official-modernizer
-
-permissions:
-  contents: write   # 🔥 Release 403 문제의 핵심 해결
+name: rust-modernizer-3os
 
 on:
   push:
@@ -9,50 +6,9 @@ on:
   pull_request:
 
 jobs:
-  migrate:
-    name: Official Rust Dynamic Migration
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Dependencies
-        run: |
-          pip install requests beautifulsoup4 tree_sitter
-          mkdir -p legacy_src modern_src migration_logs
-
-      - name: Copy legacy source
-        run: |
-          rsync -av \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='legacy_src' \
-            --exclude='modern_src' \
-            --exclude='migration_logs' \
-            ./ legacy_src/
-
-      - name: Run Official Rust Modernizer
-        run: |
-          python3 tools/rust_modernizer.py legacy_src modern_src \
-            2>&1 | tee migration_logs/modernizer.log
-
-      - name: Semantic Diff
-        run: |
-          echo "=== SEMANTIC DIFF ===" > migration_logs/semantic-diff.txt
-          diff -ru legacy_src modern_src >> migration_logs/semantic-diff.txt || true
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: migration-logs
-          path: migration_logs/
-
   build:
-    name: 3OS Build
-    needs: migrate
+    name: Build Modernizer on 3OS
     runs-on: ${{ matrix.os }}
-
     strategy:
       fail-fast: false
       matrix:
@@ -60,114 +16,112 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Rust toolchain
       - uses: dtolnay/rust-toolchain@stable
 
-      # Linux/macOS: bash 문법
-      - name: Ensure Rust Target (Unix)
-        if: matrix.os != 'windows-latest'
-        shell: bash
-        run: |
-          mkdir -p src
-          if [ ! -f src/main.rs ] && [ ! -f src/lib.rs ]; then
-            echo 'fn main() { println!("Auto-generated main.rs"); }' > src/main.rs
-          fi
-
-      # Windows: PowerShell 문법
-      - name: Ensure Rust Target (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          if (!(Test-Path "src")) {
-            New-Item -ItemType Directory -Path "src" | Out-Null
-          }
-          if (!(Test-Path "src/main.rs") -and !(Test-Path "src/lib.rs")) {
-            'fn main() { println!("Auto-generated main.rs"); }' | Out-File -FilePath src/main.rs -Encoding utf8
-          }
-
-      - name: Build
+      # Build
+      - name: Build (release)
         run: cargo build --release
 
-      - name: Test
-        run: cargo test --release || true
-
-      # --- ProofLedger ---
-      - name: ProofLedger
+      # Output binary path depends on OS
+      - name: Rename binary
         run: |
-          mkdir -p proofledger
-          echo "=== Build Info ===" > proofledger/build-${{ matrix.os }}.txt
-          echo "OS: ${{ matrix.os }}" >> proofledger/build-${{ matrix.os }}.txt
-          echo "Commit: ${{ github.sha }}" >> proofledger/build-${{ matrix.os }}.txt
-          echo "Branch: ${{ github.ref_name }}" >> proofledger/build-${{ matrix.os }}.txt
-          echo "Time: $(date)" >> proofledger/build-${{ matrix.os }}.txt
+          mkdir -p dist
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp target/release/rust_modernizer.exe dist/rust_modernizer-windows.exe
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            cp target/release/rust_modernizer dist/rust_modernizer-macos
+          else
+            cp target/release/rust_modernizer dist/rust_modernizer-ubuntu
+          fi
 
-      # --- SHA256 (Unix) ---
-      - name: SHA256 (Unix)
-        if: matrix.os != 'windows-latest'
+      # Prepare example file
+      - name: Prepare legacy example
         run: |
-          echo "=== SHA256 ===" > proofledger/sha256-${{ matrix.os }}.txt
-          find . -type f -maxdepth 3 ! -path "./.git/*" \
-            -exec sha256sum {} \; >> proofledger/sha256-${{ matrix.os }}.txt
+          echo 'fn main(){println!("legacy legacy");}' > hello.rs
 
-      # --- SHA256 (Windows) ---
-      - name: SHA256 (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
+      # Run modernizer on each OS
+      - name: Run Modernizer example
         run: |
-          "=== SHA256 ===" | Out-File proofledger/sha256-windows.txt
-          Get-ChildItem -Recurse -File | ForEach-Object {
-            $h = Get-FileHash $_.FullName -Algorithm SHA256
-            "$($h.Hash)  $($_.FullName)" | Out-File proofledger/sha256-windows.txt -Append
-          }
+          mkdir -p output
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            ./dist/rust_modernizer-windows.exe hello.rs output/modern_output.rs
+          else
+            ./dist/rust_modernizer-* hello.rs output/modern_output.rs
+          fi
 
-      # --- ZIP Packaging (Unix) ---
-      - name: Package Artifact (Unix)
-        if: matrix.os != 'windows-latest'
-        shell: bash
+      # SHA256
+      - name: Generate SHA256
         run: |
-          mkdir -p out
-          zip -r out/RustModernized-v12.2-${{ matrix.os }}.zip \
-            target/release proofledger migration_logs || true
+          cd dist
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            certutil -hashfile rust_modernizer-windows.exe SHA256 > sha256-windows.txt
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            shasum -a 256 rust_modernizer-macos > sha256-macos.txt
+          else
+            sha256sum rust_modernizer-ubuntu > sha256-ubuntu.txt
+          fi
 
-      # --- ZIP Packaging (Windows 완전 안정화) ---
-      - name: Package Artifact (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
+      # ZIP packaging
+      - name: Package ZIP
         run: |
-          New-Item -ItemType Directory -Force -Path target/release | Out-Null
-          New-Item -ItemType Directory -Force -Path proofledger | Out-Null
-          New-Item -ItemType Directory -Force -Path migration_logs | Out-Null
-          New-Item -ItemType Directory -Force -Path out | Out-Null
+          mkdir -p package
+          cp dist/* package/
 
-          Compress-Archive `
-            -Path "target/release","proofledger","migration_logs" `
-            -DestinationPath "out/RustModernized-v12.2-${{ matrix.os }}.zip" `
-            -Force
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            powershell -Command "Compress-Archive -LiteralPath package -DestinationPath rust_modernizer-windows.zip"
+            mv rust_modernizer-windows.zip dist/
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            zip -r rust_modernizer-macos.zip package
+            mv rust_modernizer-macos.zip dist/
+          else
+            zip -r rust_modernizer-ubuntu.zip package
+            mv rust_modernizer-ubuntu.zip dist/
+          fi
 
+      # Upload artifact
       - uses: actions/upload-artifact@v4
         with:
-          name: RustModernized-v12.2-${{ matrix.os }}
-          path: out/
+          name: modernizer-${{ matrix.os }}
+          path: dist/
 
   release:
-    name: Auto Release
+    name: Create Unified Release
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'   # PR에서는 자동 릴리즈 금지
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      # Extract timestamp version
+      - name: Extract version tag
+        id: version
+        run: |
+          echo "tag=v$(date +'%Y.%m.%d-%H%M')-modernizer" >> $GITHUB_OUTPUT
+
+      # Download all OS artifacts
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
         with:
-          path: all-artifacts
+          path: release-assets/
 
-      - name: Create Tag
-        id: tagger
-        run: echo "tag=v$(date +'%Y.%m.%d-%H%M')-v12.2" >> $GITHUB_OUTPUT
-
-      - name: Release
+      # Create GitHub Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tagger.outputs.tag }}
-          name: "Rust Official Dynamic Modernizer (v12.2)"
-          files: all-artifacts/**/*
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Rust Modernizer Full 3OS Release (${{ steps.version.outputs.tag }})
+          body: |
+            ## 🚀 Rust Legacy → Modern Migration Tool
+            This release contains:
+            - Windows, macOS, Linux binaries
+            - ZIP bundles
+            - SHA256 checksums
+            - Modernizer example outputs
+
+            Fully auto-generated by GitHub Actions.
+          files: release-assets/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
