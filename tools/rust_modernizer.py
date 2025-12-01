@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os
 import sys
 import requests
@@ -48,10 +47,6 @@ def fetch_html(url):
     return ""
 
 def extract_rules():
-    """
-    공식 Rust 문서의 텍스트를 기반으로 규칙을 동적으로 생성한다.
-    단 한 줄도 하드코딩된 규칙 없음.
-    """
     rules = {}
 
     for url in RUST_DOCS:
@@ -62,31 +57,16 @@ def extract_rules():
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text().lower()
 
-        # ----------------------------------------------
-        # Rule: unwrap() → ?
-        # 공식 문서에 "prefer the ? operator" 문구가 존재하면 적용
-        # ----------------------------------------------
         if "prefer the ? operator" in text or "use the ? operator" in text:
             rules["unwrap"] = (".unwrap()", "?")
             rules["expect"] = ("expect(", "? /* expect */")
 
-        # ----------------------------------------------
-        # Rule: try! → ?
-        # edition guide에서 try! macro is deprecated
-        # ----------------------------------------------
         if "try! macro" in text and "deprecated" in text:
             rules["try_macro"] = ("try!(", "?")
 
-        # ----------------------------------------------
-        # Rule: println! discouraged in library code
-        # api-guidelines
-        # ----------------------------------------------
         if "avoid println" in text or "avoid printing" in text:
             rules["println"] = ("println!", "log::info!")
 
-        # ----------------------------------------------
-        # Deprecated API 자동 수집
-        # ----------------------------------------------
         deprecated_candidates = [
             "description()",
             "mem::uninitialized",
@@ -104,13 +84,9 @@ def extract_rules():
 # ============================================================
 
 def ast_transform(code):
-    """
-    AST 기반으로 unwrap/expect/unsafe/minimise clone 등을 감지
-    """
     tree = parser.parse(code.encode())
     root = tree.root_node
 
-    # 단순 AST 검사 (여기선 탐지만, rule은 dynamic rules가 적용)
     if b"unsafe" in code:
         print("  - Found unsafe block")
 
@@ -127,7 +103,10 @@ def apply_rules(code, rules):
     return updated
 
 def process_file(src, dst, rules):
-    code = open(src, "r", encoding="utf8").read()
+    print(f"[FILE] {src} → {dst}")
+
+    with open(src, "r", encoding="utf8") as f:
+        code = f.read()
 
     code = ast_transform(code)
     code = apply_rules(code, rules)
@@ -137,30 +116,45 @@ def process_file(src, dst, rules):
         f.write(code)
 
 # ============================================================
-# Directory traversal
+# Main Entry
 # ============================================================
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: rust_modernizer.py <src_dir> <dst_dir>")
+        print("Usage:")
+        print("  rust_modernizer.py <src_file> <dst_file>")
+        print("  rust_modernizer.py <src_dir>  <dst_dir>")
         return
 
-    src_dir = sys.argv[1]
-    dst_dir = sys.argv[2]
+    src = sys.argv[1]
+    dst = sys.argv[2]
 
     print("[INFO] Generating dynamic rules from rust-lang.org ...")
     rules = extract_rules()
 
-    print(f"[INFO] Starting AST rewrite: {src_dir} → {dst_dir}")
-    for root, _, files in os.walk(src_dir):
+    # -------------------------------------------------------
+    # FILE → FILE 모드
+    # -------------------------------------------------------
+    if os.path.isfile(src):
+        process_file(src, dst, rules)
+        print("[INFO] File modernize completed.")
+        return
+
+    # -------------------------------------------------------
+    # DIRECTORY → DIRECTORY 모드
+    # -------------------------------------------------------
+    print(f"[INFO] Starting AST rewrite: {src} → {dst}")
+
+    for root, _, files in os.walk(src):
         for f in files:
             if f.endswith(".rs"):
-                src = os.path.join(root, f)
-                dst = os.path.join(dst_dir, os.path.relpath(src, src_dir))
-                print(f"[REWRITE] {src} → {dst}")
-                process_file(src, dst, rules)
+                src_file = os.path.join(root, f)
+                rel = os.path.relpath(src_file, src)
+                dst_file = os.path.join(dst, rel)
+                process_file(src_file, dst_file, rules)
 
     print("[INFO] Rust Modernizer completed.")
 
 if __name__ == "__main__":
     main()
+
