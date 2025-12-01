@@ -1,4 +1,4 @@
-name: rust-ci-v5-semantic-migration
+name: rust-ci-v11-ast-migration
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   migrate:
-    name: Legacy → Modern Semantic Migration
+    name: AST Semantic Migration Pipeline
     runs-on: ubuntu-latest
 
     steps:
@@ -15,42 +15,84 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # 1. Prepare directories
       - name: Prepare directories
         run: |
           mkdir -p legacy_src
           mkdir -p modern_src
+          mkdir -p ast_rewrite_output
           mkdir -p migration_logs
 
+      # 2. Edition auto-upgrade
+      - name: Cargo.toml Edition Upgrade to 2024
+        run: |
+          if grep -q 'edition' Cargo.toml; then
+            sed -i 's/edition *= *"[^"]*"/edition = "2024"/' Cargo.toml
+          else
+            echo 'edition = "2024"' >> Cargo.toml
+          fi
+          echo "Edition updated to 2024" | tee migration_logs/edition-edit.log
+
+      # 3. Copy source to legacy_src
       - name: Copy legacy source
         run: |
-          rsync -av --exclude modern_src --exclude migration_logs ./ legacy_src/
+          rsync -av \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='legacy_src' \
+            --exclude='modern_src' \
+            --exclude='migration_logs' \
+            --exclude='ast_rewrite_output' \
+            ./ legacy_src/
 
-      - name: Rust Edition Auto-Upgrade
+      # 4. Rustfix edition migration
+      - name: Rustfix Edition Migration
         run: |
-          echo "Running rustfix for edition migration..."
-          cargo fix --edition --allow-no-vcs -p "$(basename $PWD)" | tee migration_logs/edition-upgrade.log || true
+          cd legacy_src
+          cargo fix --edition --allow-no-vcs \
+            2>&1 | tee ../migration_logs/rustfix.log || true
 
-      - name: Apply Clippy-based auto fixes
+      # 5. Clippy auto-fix
+      - name: Clippy Auto Fix
         run: |
-          echo "Running cargo clippy + fix..."
-          cargo clippy --fix --allow-no-vcs -- -D warnings | tee migration_logs/clippy-fix.log || true
+          cd legacy_src
+          cargo clippy --fix --allow-no-vcs -- -D warnings \
+            2>&1 | tee ../migration_logs/clippy-fix.log || true
 
-      - name: Rustfmt (Modern Formatting Pass)
+      # 6. Rustfmt
+      - name: Rustfmt
         run: |
-          cargo fmt 2>&1 | tee migration_logs/rustfmt.log || true
+          cd legacy_src
+          cargo fmt 2>&1 | tee ../migration_logs/rustfmt.log || true
 
-      - name: Copy migrated code
-        run: rsync -av ./* modern_src/
-
-      - name: Semantic Diff (RustSpec-style)
+      # 7. AST Rewriting (tree-sitter based)
+      - name: Install AST Tools
         run: |
-          echo "=== SEMANTIC DIFF ===" > migration_logs/semantic-diff.txt
+          pip install tree_sitter
+          pip install tree_sitter_rust
+
+      - name: AST Rewrite
+        run: |
+          echo "Running AST-based rewrite..."
+          python3 tools/ast_rewriter.py legacy_src ast_rewrite_output \
+            2>&1 | tee migration_logs/ast-rewrite.log || true
+
+      # 8. Combine AST rewrite results → modern_src
+      - name: Copy AST rewrite output to modern_src
+        run: |
+          rsync -av ast_rewrite_output/ modern_src/
+
+      # 9. Semantic diff generation
+      - name: Semantic Diff
+        run: |
+          echo "=== SEMANTIC DIFF (legacy vs modern) ===" > migration_logs/semantic-diff.txt
           diff -ru legacy_src modern_src >> migration_logs/semantic-diff.txt || true
 
-      - name: Upload migration logs
+      # 10. Upload migration logs
+      - name: Upload Migration Logs
         uses: actions/upload-artifact@v4
         with:
-          name: migration-logs
+          name: migration-logs-v11
           path: migration_logs/
 
   build:
@@ -67,13 +109,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
 
-      - run: cargo build --release || true
-      - run: cargo test --release || true
+      - name: Build
+        run: cargo build --release
 
-      - name: Setup ProofLedger
+      - name: Test
+        run: cargo test --release || true
+
+      - name: ProofLedger
         run: |
           mkdir -p proofledger
-          echo "OS: ${{ matrix.os }}" > proofledger/build-info-${{ matrix.os }}.txt
+          echo "=== Build Info ===" > proofledger/build-info-${{ matrix.os }}.txt
+          echo "OS: ${{ matrix.os }}" >> proofledger/build-info-${{ matrix.os }}.txt
           echo "Commit: ${{ github.sha }}" >> proofledger/build-info-${{ matrix.os }}.txt
           echo "Branch: ${{ github.ref_name }}" >> proofledger/build-info-${{ matrix.os }}.txt
           echo "Time: $(date)" >> proofledger/build-info-${{ matrix.os }}.txt
@@ -82,7 +128,8 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           echo "=== SHA256 ===" > proofledger/sha256-${{ matrix.os }}.txt
-          find . -maxdepth 3 -type f ! -path "./.git/*" -exec sha256sum {} \; >> proofledger/sha256-${{ matrix.os }}.txt
+          find . -type f -maxdepth 3 ! -path "./.git/*" \
+            -exec sha256sum {} \; >> proofledger/sha256-${{ matrix.os }}.txt
 
       - name: SHA256 Proof (Windows)
         if: matrix.os == 'windows-latest'
@@ -90,20 +137,20 @@ jobs:
         run: |
           "=== SHA256 ===" | Out-File proofledger/sha256-windows.txt
           Get-ChildItem -Recurse -File | ForEach-Object {
-            $h = Get-FileHash $_.FullName -Algorithm SHA256
-            "$($h.Hash)  $($_.FullName)" | Out-File proofledger/sha256-windows.txt -Append
+            $hash = Get-FileHash $_.FullName -Algorithm SHA256
+            "$($hash.Hash)  $($_.FullName)" | Out-File proofledger/sha256-windows.txt -Append
           }
 
-      - name: Package Build Artifact
+      - name: Package Artifact
         shell: bash
         run: |
           mkdir -p out
-          zip -r out/RustLegacyModern-v5-${{ matrix.os }}.zip target/release proofledger migration_logs || true
+          zip -r out/RustModernized-v11-${{ matrix.os }}.zip \
+            target/release proofledger migration_logs || true
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: RustLegacyModern-v5-${{ matrix.os }}
+          name: RustModernized-v11-${{ matrix.os }}
           path: out/
 
   release:
@@ -118,24 +165,26 @@ jobs:
         with:
           path: all-artifacts
 
-      - name: Generate Tag
+      - name: Tag Generator
         id: tagger
-        run: echo "tag=v$(date +'%Y.%m.%d-%H%M')-v5" >> $GITHUB_OUTPUT
+        run: echo "tag=v$(date +'%Y.%m.%d-%H%M')-v11" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tagger.outputs.tag }}
-          name: "Rust Legacy → Modern Migration (v5) — ${{ steps.tagger.outputs.tag }}"
+          name: "Rust Legacy → Modern AST Migration (v11)"
           body: |
-            ### Automated Semantic Migration Pipeline
-            Included:
-            - Legacy → Modern Rust semantic migration
-            - Edition upgrade (2015→2024)
-            - Clippy auto-fix
-            - Rustfmt modernization
-            - Semantic Diff (RustSpec style)
-            - 3OS build artifacts
-            - SHA256 proofs
-            - ProofLedger metadata
+            ### Rust Migration Pipeline v11
+            Includes:
+            - tree-sitter AST rewriting
+            - cargo edition upgrade (→ 2024)
+            - rustfix
+            - clippy auto-rewrite
+            - rustfmt
+            - semantic diff
+            - 3OS Build
+            - ProofLedger + SHA256
+            - full auto release
           files: all-artifacts/**/*
+
