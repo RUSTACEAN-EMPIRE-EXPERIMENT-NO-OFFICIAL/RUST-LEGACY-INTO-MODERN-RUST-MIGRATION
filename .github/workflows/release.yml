@@ -1,4 +1,4 @@
-name: rust-ci-v12-official-modernizer
+name: rust-ci-v12.1-official-modernizer
 
 on:
   push:
@@ -59,13 +59,27 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
 
-      # Ensure Cargo target exists (prevent build failure)
-      - name: Ensure Rust Target
+      # Linux/macOS: Bash version
+      - name: Ensure Rust Target (Unix)
+        if: matrix.os != 'windows-latest'
+        shell: bash
         run: |
           mkdir -p src
           if [ ! -f src/main.rs ] && [ ! -f src/lib.rs ]; then
             echo 'fn main() { println!("Auto-generated main.rs"); }' > src/main.rs
           fi
+
+      # Windows: PowerShell version
+      - name: Ensure Rust Target (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          if (!(Test-Path "src")) {
+            New-Item -ItemType Directory -Path "src" | Out-Null
+          }
+          if (!(Test-Path "src/main.rs") -and !(Test-Path "src/lib.rs")) {
+            'fn main() { println!("Auto-generated main.rs"); }' | Out-File -FilePath src/main.rs -Encoding utf8
+          }
 
       - name: Build
         run: cargo build --release
@@ -102,21 +116,21 @@ jobs:
             "$($h.Hash)  $($_.FullName)" | Out-File proofledger/sha256-windows.txt -Append
           }
 
-      # --- ZIP Packaging for Unix ---
+      # --- ZIP Packaging (Unix) ---
       - name: Package Artifact (Unix)
         if: matrix.os != 'windows-latest'
         shell: bash
         run: |
           mkdir -p out
-          zip -r out/RustModernized-v12-${{ matrix.os }}.zip \
+          zip -r out/RustModernized-v12.1-${{ matrix.os }}.zip \
             target/release proofledger migration_logs || true
 
-      # --- ZIP Packaging for Windows (완전 안정화) ---
+      # --- ZIP Packaging (Windows, fully stable) ---
       - name: Package Artifact (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          # 반드시 존재하도록 강제 생성 (없으면 Compress-Archive 에러)
+          # Force directories to exist to avoid Compress-Archive error
           New-Item -ItemType Directory -Force -Path target/release | Out-Null
           New-Item -ItemType Directory -Force -Path proofledger | Out-Null
           New-Item -ItemType Directory -Force -Path migration_logs | Out-Null
@@ -124,12 +138,12 @@ jobs:
 
           Compress-Archive `
             -Path "target/release","proofledger","migration_logs" `
-            -DestinationPath "out/RustModernized-v12-${{ matrix.os }}.zip" `
+            -DestinationPath "out/RustModernized-v12.1-${{ matrix.os }}.zip" `
             -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: RustModernized-v12-${{ matrix.os }}
+          name: RustModernized-v12.1-${{ matrix.os }}
           path: out/
 
   release:
@@ -146,11 +160,12 @@ jobs:
 
       - name: Create Tag
         id: tagger
-        run: echo "tag=v$(date +'%Y.%m.%d-%H%M')-v12" >> $GITHUB_OUTPUT
+        run: echo "tag=v$(date +'%Y.%m.%d-%H%M')-v12.1" >> $GITHUB_OUTPUT
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tagger.outputs.tag }}
-          name: "Rust Official Dynamic Modernizer (v12)"
+          name: "Rust Official Dynamic Modernizer (v12.1)"
           files: all-artifacts/**/*
+
