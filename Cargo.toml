@@ -7,3 +7,9 @@ edition = "2021"
 reqwest = { version = "0.12", features = ["blocking"] }
 scraper = "0.17"
 regex = "1"
+# CLI 인자 처리
+clap = { version = "4.0", features = ["derive"] }
+# Rust 코드 파싱 (AST)
+syn = { version = "2.0", features = ["full"] } 
+# 파일 I/O 및 에러 처리 개선
+anyhow = "1.0" 
