@@ -1,4 +1,4 @@
-name: rust-modernizer-3os
+name: rust-modernizer-3os-v2
 
 # ---------------------------------------------------------
 # GitHub Release 생성 권한 (403 방지)
@@ -13,7 +13,6 @@ on:
   schedule:
     # Rust의 최신 stable 버전을 정기적으로 확인하고 빌드하기 위해
     # 매주 월요일 01:00 UTC에 워크플로우를 실행합니다.
-    # (이는 한국 시간 KST 기준 월요일 오전 10시입니다.)
     - cron: '0 1 * * 1'
 
 jobs:
@@ -28,7 +27,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # dtolnay/rust-toolchain@stable을 사용하여 항상 최신 stable Rust 버전으로 빌드
+      - uses: dtolnay/rust-toolchain@stable 
 
       # ---------------------------------------------------------
       # Build Release
@@ -66,31 +66,34 @@ jobs:
       - name: Prepare legacy example
         shell: bash
         run: |
-          echo 'fn main(){println!("legacy code");}' > hello.rs
+          echo 'fn main(){println!("legacy code. This should be modernized.");}' > hello.rs
 
       # ---------------------------------------------------------
-      # Run Modernizer — OUTPUT FILE NAME OS별로 분리 (중복 충돌 방지)
+      # Run Modernizer — CLI 사용법 수정 (출력 경로에 --output 플래그 사용)
       # ---------------------------------------------------------
       - name: Run Modernizer (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           mkdir output
-          .\dist\rust_modernizer-windows.exe hello.rs output/modern_output-windows.rs
+          # 수정: --output 플래그 추가
+          .\dist\rust_modernizer-windows.exe hello.rs --output output/modern_output-windows.rs
 
       - name: Run Modernizer (macOS)
         if: matrix.os == 'macos-latest'
         shell: bash
         run: |
           mkdir -p output
-          ./dist/rust_modernizer-macos hello.rs output/modern_output-macos.rs
+          # 수정: --output 플래그 추가
+          ./dist/rust_modernizer-macos hello.rs --output output/modern_output-macos.rs
 
       - name: Run Modernizer (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           mkdir -p output
-          ./dist/rust_modernizer-ubuntu hello.rs output/modern_output-ubuntu.rs
+          # 수정: --output 플래그 추가
+          ./dist/rust_modernizer-ubuntu hello.rs --output output/modern_output-ubuntu.rs
 
       # ---------------------------------------------------------
       # SHA256 Checksum
@@ -179,6 +182,8 @@ jobs:
             - ZIP packages
             - SHA256 checksums
             - OS-specific Modernizer outputs
+            
+            This release was built using the latest stable Rust toolchain based on a weekly schedule.
           files: release-assets/**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
