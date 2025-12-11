@@ -9,7 +9,12 @@ scraper = "0.17"
 regex = "1"
 # CLI 인자 처리
 clap = { version = "4.0", features = ["derive"] }
-# Rust 코드 파싱 (AST)
-syn = { version = "2.0", features = ["full"] } 
 # 파일 I/O 및 에러 처리 개선
 anyhow = "1.0" 
+
+# syn 의존성: 'full' 기능 외에, AST를 수정하는 데 필요한 'visit-mut' 기능을 명시적으로 추가해야 합니다.
+syn = { version = "2.0", features = ["full", "visit-mut"] } 
+
+# E0433 에러 해결: AST를 코드로 변환할 때 사용되는 'prettyplease' 크레이트를 추가합니다.
+prettyplease = "0.2.1" 
+
