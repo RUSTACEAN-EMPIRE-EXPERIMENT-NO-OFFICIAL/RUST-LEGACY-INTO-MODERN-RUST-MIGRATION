@@ -10,6 +10,11 @@ on:
   push:
     branches: ["main"]
   pull_request:
+  schedule:
+    # Rust의 최신 stable 버전을 정기적으로 확인하고 빌드하기 위해
+    # 매주 월요일 01:00 UTC에 워크플로우를 실행합니다.
+    # (이는 한국 시간 KST 기준 월요일 오전 10시입니다.)
+    - cron: '0 1 * * 1'
 
 jobs:
   build:
@@ -177,5 +182,3 @@ jobs:
           files: release-assets/**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
