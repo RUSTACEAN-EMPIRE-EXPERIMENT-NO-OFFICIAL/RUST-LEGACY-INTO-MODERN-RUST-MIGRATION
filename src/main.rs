@@ -4,8 +4,14 @@ use std::{fs, path::PathBuf};
 use syn::{
     parse_quote,
     visit_mut::{self, VisitMut},
-    Expr, ExprMethodCall, Lit,
+    Expr, ExprCall, ExprMethodCall, Lit,
 };
+
+/// ----------------------------------------------------
+/// 0. 상수: 공식 문서 참조 링크
+/// ----------------------------------------------------
+const DOC_URL_UNWRAP_TO_TRY: &str = "https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html#a-shortcut-for-propagating-errors-the--operator";
+const DOC_URL_MEM_UNINITIALIZED: &str = "https://doc.rust-lang.org/std/mem/fn.uninitialized";
 
 /// ----------------------------------------------------
 /// 1. CLI 구조 정의 (clap)
@@ -21,7 +27,7 @@ struct Args {
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// 원본 파일을 직접 덮어쓰기 (--output 또는 --dry-run 지정 시 무시됨)
+    /// 원본 파일을 직접 덮어쓰기
     #[arg(long, default_value_t = false)]
     inplace: bool,
 
@@ -33,35 +39,55 @@ struct Args {
 /// ----------------------------------------------------
 /// 2. AST 변환기 정의 (syn::VisitMut)
 /// ----------------------------------------------------
-/// 'Legacy' 코드를 'Modern' 코드로 변환하고 변경 여부를 추적하는 구조체
+/// 'Legacy' 코드를 'Modern' 코드로 변환하고 변경 여부 및 카운트를 추적하는 구조체
 struct Modernizer {
-    /// AST가 변경되었는지 여부를 추적하는 플래그
     changed: bool, 
-    /// .unwrap() 변환 카운트
     unwrap_count: u32,
-    /// .expect() 변환 카운트
     expect_count: u32,
+    ok_unwrap_count: u32, // `ok().unwrap()` 카운트
+    uninitialized_count: u32, // `mem::uninitialized` 카운트
 }
 
 impl Modernizer {
-    /// .unwrap() 또는 .expect() 호출을 ? 연산자를 사용하는 Expr::Try 형태로 변환합니다.
-    fn transform_unwrap_to_try(&mut self, method_call: &ExprMethodCall) -> Option<Expr> {
+    /// .unwrap(), .expect(), .ok().unwrap() 호출을 ? 연산자로 변환
+    fn transform_method_call(&mut self, method_call: &ExprMethodCall) -> Option<Expr> {
         let method_name = method_call.method.to_string();
-        let span = method_call.method.span(); // 위치 정보 (라인/컬럼)
-
+        let span = method_call.method.span(); 
+        
+        // 1. .unwrap() -> ? 변환
         if method_name == "unwrap" && method_call.args.is_empty() {
-            // .unwrap() -> ? 변환
+            
+            // 1-1. `expr.ok().unwrap()` 패턴 확인
+            if let Expr::MethodCall(inner_call) = &*method_call.receiver {
+                if inner_call.method.to_string() == "ok" && inner_call.args.is_empty() {
+                    println!("[MOD] ✅ `ok().unwrap()` -> `?` (Span: {:?})", span);
+                    self.ok_unwrap_count += 1;
+                    self.changed = true;
+                    
+                    // `(expr).ok().unwrap()`을 `(expr)?`로 변환하고 공식 문서 참조 주석 추가
+                    return Some(parse_quote! {
+                        // DOC: Converted `ok().unwrap()` (unsafe) to `?` (idiomatic error propagation).
+                        // Ref: #DOC_URL_UNWRAP_TO_TRY
+                        #inner_call.receiver?
+                    });
+                }
+            }
+            
+            // 1-2. 일반적인 `expr.unwrap()` 패턴
             println!("[MOD] ✅ .unwrap() -> ? (Span: {:?})", span);
-            self.changed = true;
             self.unwrap_count += 1;
+            self.changed = true;
             
-            // Reciever 뒤에 ?를 붙인 새로운 Expr::Try를 생성합니다.
-            Some(parse_quote! {
+            return Some(parse_quote! {
+                // DOC: Converted `.unwrap()` (panic risk) to `?` (idiomatic error propagation).
+                // Ref: #DOC_URL_UNWRAP_TO_TRY
                 #method_call.receiver?
-            })
-        } else if method_name == "expect" && method_call.args.len() == 1 {
-            // .expect("msg") -> ? 변환 및 경고 주석 추가
+            });
             
+        } 
+        
+        // 2. .expect("msg") -> ? 변환
+        else if method_name == "expect" && method_call.args.len() == 1 {
             let msg = if let Expr::Lit(expr_lit) = &method_call.args[0] {
                 if let Lit::Str(lit_str) = &expr_lit.lit {
                     lit_str.value()
@@ -73,17 +99,44 @@ impl Modernizer {
             };
 
             println!("[MOD] ⚠️ .expect(\"{}\") -> ? (Span: {:?}, Manual review needed.)", msg, span);
-            self.changed = true;
             self.expect_count += 1;
+            self.changed = true;
             
-            // Receiver 뒤에 ?를 붙이고, expect 메시지는 주석으로 남깁니다.
-            Some(parse_quote! {
+            return Some(parse_quote! {
+                // DOC: Converted `.expect()` to `?`. Review if the original panic message should be kept
+                // or if the function's error type needs adjustment for `?` to work correctly.
                 // NOTE: Original .expect() message: #msg 
+                // Ref: #DOC_URL_UNWRAP_TO_TRY
                 #method_call.receiver?
-            })
-        } else {
-            None
+            });
+        } 
+        
+        None
+    }
+
+    /// `std::mem::uninitialized()` 호출을 `MaybeUninit`으로 변환
+    fn transform_uninitialized(&mut self, expr_call: &ExprCall) -> Option<Expr> {
+        if let Expr::Path(expr_path) = &*expr_call.func {
+            if let Some(segment) = expr_path.path.segments.last() {
+                // 경로의 마지막 세그먼트가 `uninitialized`인지 확인
+                if segment.ident.to_string() == "uninitialized" {
+                    println!("[MOD] ❌ Found deprecated `uninitialized` (Span: {:?}). Converted to `MaybeUninit`.", segment.ident.span());
+                    self.uninitialized_count += 1;
+                    self.changed = true;
+                    
+                    // `MaybeUninit::uninit().assume_init()`로 변환하고 경고 주석 추가
+                    return Some(parse_quote! {
+                        // DOC: `std::mem::uninitialized` is deprecated. Replaced with `MaybeUninit` usage.
+                        // WARNING: This conversion remains `unsafe` and MUST be manually reviewed for initialization correctness.
+                        // Ref: #DOC_URL_MEM_UNINITIALIZED
+                        unsafe { 
+                            std::mem::MaybeUninit::uninit().assume_init()
+                        }
+                    });
+                }
+            }
         }
+        None
     }
 }
 
@@ -93,26 +146,29 @@ impl VisitMut for Modernizer {
         visit_mut::visit_expr_mut(self, i); 
         
         // 2. 패턴 매칭을 통해 Legacy 패턴을 찾습니다.
-        match i {
-            // (1) .unwrap() 및 .expect() 변환 로직 적용
-            Expr::MethodCall(method_call) => {
-                if let Some(new_expr) = self.transform_unwrap_to_try(method_call) {
-                    *i = new_expr;
-                }
-            }
+        let new_expr = match i {
+            // (1) .unwrap(), .expect(), .ok().unwrap() 변환
+            Expr::MethodCall(method_call) => self.transform_method_call(method_call),
             
-            // (2) Deprecated 리터럴 문자열 주석 처리 예시 (원본 유지)
+            // (2) `std::mem::uninitialized()` 함수 호출 변환
+            Expr::Call(expr_call) => self.transform_uninitialized(expr_call),
+
+            // (3) Deprecated 리터럴 문자열 주석 처리 예시 (변환 없음, 로그만)
             Expr::Lit(expr_lit) => {
                 if let Lit::Str(lit_str) = &expr_lit.lit {
                     if lit_str.value().contains("mem::uninitialized") {
-                        println!("[MOD] ℹ️ Found deprecated string pattern (mem::uninitialized).");
+                        println!("[MOD] ℹ️ Found deprecated string pattern in literal.");
                         self.changed = true;
-                        // 여기에 변환 로직을 추가하여 주석 처리 등을 할 수 있습니다.
                     }
                 }
+                None
             }
             
-            _ => {}
+            _ => None
+        };
+
+        if let Some(expr) = new_expr {
+            *i = expr;
         }
     }
 }
@@ -161,8 +217,9 @@ fn main() -> Result<()> {
         changed: false, 
         unwrap_count: 0,
         expect_count: 0,
+        ok_unwrap_count: 0,
+        uninitialized_count: 0,
     };
-    // 
     modernizer.visit_file_mut(&mut ast); // AST의 루트 노드(File)부터 변환기 적용
 
     // 6. 변경 사항 확인 및 보고서 출력
@@ -174,7 +231,9 @@ fn main() -> Result<()> {
     // 변환 보고서
     println!("\n📊 변환 보고서:");
     println!("  - ✅ .unwrap() 변환 완료: {} 건", modernizer.unwrap_count);
+    println!("  - ✅ .ok().unwrap() 변환 완료: {} 건", modernizer.ok_unwrap_count);
     println!("  - ⚠️ .expect() 변환 완료: {} 건 (수동 검토 필요)", modernizer.expect_count);
+    println!("  - ❌ `mem::uninitialized` 변환: {} 건 (unsafe 코드, **필수 검토**)", modernizer.uninitialized_count);
 
 
     // 7. AST를 코드 문자열로 재구성 (prettyplease 사용)
