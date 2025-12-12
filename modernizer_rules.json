@@ -1,0 +1,42 @@
+[
+    {
+        "id": "unwrap_to_try",
+        "ast_type": "ExprMethodCall",
+        "method_name": "unwrap",
+        "args_count": 0,
+        "replacement_template": "#receiver?",
+        "level_icon": "✅",
+        "doc_url": "https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html",
+        "nested_method": null
+    },
+    {
+        "id": "expect_to_try",
+        "ast_type": "ExprMethodCall",
+        "method_name": "expect",
+        "args_count": 1,
+        "replacement_template": "#receiver?",
+        "level_icon": "⚠️",
+        "doc_url": "https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html",
+        "nested_method": null
+    },
+    {
+        "id": "ok_unwrap_to_try",
+        "ast_type": "ExprMethodCall",
+        "method_name": "unwrap",
+        "args_count": 0,
+        "replacement_template": "#inner_receiver?",
+        "level_icon": "✅",
+        "doc_url": "https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html",
+        "nested_method": "ok"
+    },
+    {
+        "id": "mem_uninitialized_to_maybeuninit",
+        "ast_type": "ExprCall",
+        "method_name": "uninitialized",
+        "args_count": 0,
+        "replacement_template": "unsafe { std::mem::MaybeUninit::uninit().assume_init() }",
+        "level_icon": "❌",
+        "doc_url": "https://doc.rust-lang.org/std/mem/fn.uninitialized",
+        "nested_method": null
+    }
+]
