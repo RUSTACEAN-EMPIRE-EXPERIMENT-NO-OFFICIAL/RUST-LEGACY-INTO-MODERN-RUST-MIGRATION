@@ -11,7 +11,6 @@ on:
     branches: ["main"]
   pull_request:
   schedule:
-    # Rust의 최신 stable 버전을 정기적으로 확인하고 빌드하기 위해
     # 매주 월요일 01:00 UTC에 워크플로우를 실행합니다.
     - cron: '0 1 * * 1'
 
@@ -27,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # dtolnay/rust-toolchain@stable을 사용하여 항상 최신 stable Rust 버전으로 빌드
+      # 항상 최신 stable Rust 버전으로 빌드
       - uses: dtolnay/rust-toolchain@stable 
 
       # ---------------------------------------------------------
@@ -61,22 +60,27 @@ jobs:
           cp target/release/rust_modernizer dist/rust_modernizer-ubuntu
 
       # ---------------------------------------------------------
-      # Prepare simple legacy example
+      # Prepare actual legacy example for testing
       # ---------------------------------------------------------
       - name: Prepare legacy example
         shell: bash
         run: |
-          echo 'fn main(){println!("legacy code. This should be modernized.");}' > hello.rs
+          # 변환기 기능을 테스트하기 위한 실제 레거시 코드 삽입
+          echo 'fn main() -> Result<(), Box<dyn std::error::Error>> { 
+          let res = "100".parse::<i32>().unwrap(); // unwrap 테스트
+          let data_opt: Option<i32> = Some(200);
+          data_opt.ok().unwrap(); // ok().unwrap() 테스트
+          Ok(())
+          }' > hello.rs
 
       # ---------------------------------------------------------
-      # Run Modernizer — CLI 사용법 수정 (출력 경로에 --output 플래그 사용)
+      # Run Modernizer
       # ---------------------------------------------------------
       - name: Run Modernizer (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           mkdir output
-          # 수정: --output 플래그 추가
           .\dist\rust_modernizer-windows.exe hello.rs --output output/modern_output-windows.rs
 
       - name: Run Modernizer (macOS)
@@ -84,7 +88,6 @@ jobs:
         shell: bash
         run: |
           mkdir -p output
-          # 수정: --output 플래그 추가
           ./dist/rust_modernizer-macos hello.rs --output output/modern_output-macos.rs
 
       - name: Run Modernizer (Ubuntu)
@@ -92,7 +95,6 @@ jobs:
         shell: bash
         run: |
           mkdir -p output
-          # 수정: --output 플래그 추가
           ./dist/rust_modernizer-ubuntu hello.rs --output output/modern_output-ubuntu.rs
 
       # ---------------------------------------------------------
@@ -102,7 +104,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          certutil -hashfile dist\rust_modernizer-windows.exe SHA256 > dist\sha256-windows.txt
+          certutil -hashfile dist\rust_modernizer-windows.exe SHA256 | Select-Object -Index 1 | Out-File dist\sha256-windows.txt
 
       - name: SHA256 (macOS)
         if: matrix.os == 'macos-latest'
@@ -123,31 +125,32 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          Compress-Archive -LiteralPath dist -DestinationPath rust_modernizer-windows.zip
+          Compress-Archive -LiteralPath dist, output -DestinationPath rust_modernizer-windows.zip
 
       - name: ZIP (macOS)
         if: matrix.os == 'macos-latest'
         shell: bash
-        run: zip -r rust_modernizer-macos.zip dist
+        # dist와 output 폴더를 함께 압축
+        run: zip -r rust_modernizer-macos.zip dist output
 
       - name: ZIP (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         shell: bash
-        run: zip -r rust_modernizer-ubuntu.zip dist
+        run: zip -r rust_modernizer-ubuntu.zip dist output
 
       # ---------------------------------------------------------
-      # Upload artifacts
+      # Upload artifacts (ZIP, Checksum, Output file만 업로드)
       # ---------------------------------------------------------
       - uses: actions/upload-artifact@v4
         with:
           name: modernizer-${{ matrix.os }}
           path: |
-            dist/
-            output/
-            *.zip
+            rust_modernizer-${{ matrix.os }}.zip 
+            dist/sha256-${{ matrix.os }}.txt 
+            output/modern_output-${{ matrix.os }}.rs 
 
   # ---------------------------------------------------------
-  # RELEASE JOB (after all 3 OS build jobs complete)
+  # RELEASE JOB
   # ---------------------------------------------------------
   release:
     name: Publish Release
@@ -157,16 +160,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Auto-generate tag
-      - name: Extract timestamp tag
+      # 태그 간결화 (YYYY.MM.DD)
+      - name: Extract date tag
         id: version
         run: |
-          echo "tag=v$(date +'%Y.%m.%d-%H%M')-modernizer" >> $GITHUB_OUTPUT
+          echo "tag=v$(date +'%Y.%m.%d')" >> $GITHUB_OUTPUT
 
       # Download build artifacts
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
+          # artifact 이름 패턴을 사용
+          pattern: modernizer-*
           path: release-assets/
 
       # Publish GitHub Release
@@ -176,14 +181,14 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: Rust Modernizer – 3 OS Release (${{ steps.version.outputs.tag }})
           body: |
-            ## 🚀 Rust Legacy → Modern Migration Tool (3 OS Release)
-            Included:
-            - Windows, macOS, Linux binaries
-            - ZIP packages
-            - SHA256 checksums
-            - OS-specific Modernizer outputs
+            ## 🚀 Rust Legacy → Modern Migration Tool
             
-            This release was built using the latest stable Rust toolchain based on a weekly schedule.
-          files: release-assets/**
+            이 릴리즈는 매주 최신 Stable Rust 툴체인을 사용하여 자동 빌드되었습니다.
+            
+            **포함 사항:**
+            * Windows, macOS, Linux 바이너리 (.zip 파일)
+            * SHA256 체크섬
+            * `hello.rs` 레거시 코드를 현대화한 출력 파일 (`modern_output-*.rs`)
+          files: release-assets/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
